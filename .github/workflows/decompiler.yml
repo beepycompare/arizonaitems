@@ -1,0 +1,75 @@
+name: Items Decompiler
+
+on:
+  workflow_dispatch:
+
+jobs:
+  decompile-items:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        
+    - name: Setup Git
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        
+    - name: Download and check version
+      run: |
+        wget -O items.zip "http://pc.az-ins.com/release/game/arizona/items.zip"
+        DOWNLOADED_HASH=$(sha256sum items.zip | cut -d' ' -f1)
+        echo "Downloaded hash: $DOWNLOADED_HASH"
+        echo "DOWNLOADED_HASH=$DOWNLOADED_HASH" >> $GITHUB_ENV
+        
+        if [ -f "last_version.txt" ]; then
+          STORED_HASH=$(cat last_version.txt)
+          echo "Stored hash: $STORED_HASH"
+          
+          if [ "$DOWNLOADED_HASH" = "$STORED_HASH" ]; then
+            echo "Versions match. No update needed."
+            echo "SHOULD_UPDATE=false" >> $GITHUB_ENV
+            exit 0
+          else
+            echo "New version detected. Proceeding with update..."
+            echo "SHOULD_UPDATE=true" >> $GITHUB_ENV
+          fi
+        else
+          echo "last_version.txt not found. Proceeding with update..."
+          echo "SHOULD_UPDATE=true" >> $GITHUB_ENV
+        fi
+
+    - name: Update items if needed
+      if: env.SHOULD_UPDATE == 'true'
+      run: |
+        echo "$DOWNLOADED_HASH" > last_version.txt
+        
+        unzip -o -j items.zip "items.bin"
+        
+        git clone --depth 1 https://github.com/idmkdev/arzbintools.git temp_arzbintools
+        
+        python3 temp_arzbintools/items/main.py items.bin
+        
+        if [ $? -ne 0 ]; then
+          echo "Items decompilation failed with exit code $?"
+          exit 1
+        fi
+        
+        mkdir -p img items
+        
+        unzip -o -j items.zip "*.webp" -d img/
+        
+        python3 .github/workflows/generate_markdown.py
+      
+        rm -rf temp_arzbintools
+        rm -f items.zip items.bin items.txt
+
+    - name: Commit and push changes
+      if: env.SHOULD_UPDATE == 'true'
+      run: |
+        git add .
+        git commit -m "Update items with hash: $DOWNLOADED_HASH" || exit 0
+        git push origin main
